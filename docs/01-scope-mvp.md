@@ -54,3 +54,23 @@ and acceptance evidence state current implementation status.
    UX, payment reconciliation and accountant exports.
 7. Resilience: validated backup/restore, recovery and migration failure drills.
 8. Production readiness: realistic independent store days and remote owner review.
+
+## M1 implementation boundary
+
+M1 includes trusted local setup, owner catalog/account/supplier management,
+business/location selection, one-account sale entry and multi-line baskets,
+paid receipts, ordinary expenses, initial owner-funded expense/payable entries,
+explicit cash open/close, read-only histories, and location-scoped owner reports.
+Owner-only explained manual stock movements are permitted; operators cannot post
+them. Counts, correction requests/approvals and reversals remain M3.
+
+Rice receiving currently takes total kg (up to three decimals); sack conversion,
+packaging/repacking and specialist loss workflows remain M4. Refills and new
+container sales are distinct, but ownership/deposit/rental/delivery remain M5.
+Stock value uses per-location receipt value and proportional cost consumption;
+multi-device valuation/replay policy must be established in M2/M4.
+
+Split payment is validated in the command API and test harness; the operator UI
+currently selects one full-payment account. Reimbursement, contributions,
+withdrawals, transfers and reconciliation/export expansion remain M6. No generic
+money-entry form impersonates these events as expenses or sales.

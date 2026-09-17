@@ -11,11 +11,13 @@ export type StockReason =
   | 'count_excess'
   | 'reversal'
   | 'adjustment'
+  | 'purchase_receipt'
+  | 'manual_adjustment'
 
 export interface Workspace {
   id: string
   name: string
-  mode: 'demo' | 'production'
+  mode: 'demo' | 'local' | 'production'
 }
 
 export interface Location {
@@ -38,6 +40,7 @@ export interface WorkspaceMember {
   userId: string
   role: Role
   active: boolean
+  displayName?: string
 }
 
 export interface LocationAccess extends LocationScope {
@@ -67,6 +70,11 @@ export interface Product {
   inventoryTracked: boolean
   lowStockThreshold: number
   active: boolean
+  locationIds?: string[]
+  domainKind?: 'rice_grain' | 'water_refill' | 'water_container' | 'service' | 'stock_item'
+  version?: number
+  costKnown?: boolean
+  metadata?: Record<string, string | number | boolean>
 }
 
 export interface PaymentAccount {
@@ -76,6 +84,8 @@ export interface PaymentAccount {
   name: string
   kind: PaymentKind
   active: boolean
+  locationIds?: string[]
+  version?: number
 }
 
 export interface Sale extends LocationScope {
@@ -100,6 +110,8 @@ export interface SaleLine {
   unitPriceCentavos: number
   costCentavos: number
   lineTotalCentavos: number
+  productVersion?: number
+  costKnown?: boolean
 }
 
 export interface PaymentEntry extends LocationScope {
@@ -111,6 +123,9 @@ export interface PaymentEntry extends LocationScope {
   direction: 'in' | 'out'
   kind: 'sale' | 'expense' | 'purchase' | 'transfer' | 'owner' | 'cash_adjustment'
   createdAt: string
+  cashSessionId?: string
+  referenceId?: string
+  accountName?: string
 }
 
 export interface StockMovement extends LocationScope {
@@ -123,6 +138,8 @@ export interface StockMovement extends LocationScope {
   referenceId: string
   note?: string
   createdAt: string
+  valueDeltaCentavos?: number
+  actorId?: string
 }
 
 export interface Expense extends LocationScope {
@@ -134,6 +151,7 @@ export interface Expense extends LocationScope {
   fundedByOwner: boolean
   note?: string
   createdAt: string
+  ownerId?: string
 }
 
 export interface CashSession extends LocationScope {
@@ -147,6 +165,84 @@ export interface CashSession extends LocationScope {
   actualClosingCentavos?: number
   varianceCentavos?: number
   status: 'open' | 'closed'
+  note?: string
+  cashModelVersion?: number
+  legacyNetCentavos?: number
+  actorId?: string
+}
+
+export interface Supplier {
+  id: string
+  workspaceId: string
+  businessId: string
+  name: string
+  contact: string
+  active: boolean
+  version: number
+}
+
+export interface Purchase extends LocationScope {
+  id: string
+  supplierId?: string
+  supplierName: string
+  reference: string
+  totalCostCentavos: number
+  paidFromAccountId: string
+  status: 'received'
+  createdAt: string
+  actorId: string
+  note: string
+}
+
+export interface PurchaseLine {
+  id: string
+  purchaseId: string
+  productId: string
+  productName: string
+  quantity: number
+  unitLabel: string
+  totalCostCentavos: number
+}
+
+export interface OwnerPayable extends LocationScope {
+  id: string
+  ownerId: string
+  expenseId: string
+  amountCentavos: number
+  createdAt: string
+  kind: 'expense_funding'
+}
+
+export interface StockValuation extends LocationScope {
+  id: string
+  productId: string
+  quantityMilliunits: number
+  valueCentavos: number
+  basis: 'legacy_estimate' | 'ledger'
+}
+
+export interface CommandReceipt extends LocationScope {
+  id: string
+  kind: string
+  fingerprint: string
+  result: unknown
+  committedAt: string
+}
+
+export interface LocalDraft {
+  key: string
+  commandId: string
+  data: unknown
+  updatedAt: string
+}
+
+export interface ProductRevision {
+  id: string
+  productId: string
+  version: number
+  snapshot: Product
+  actorId: string
+  effectiveAt: string
 }
 
 export interface ActionItem {

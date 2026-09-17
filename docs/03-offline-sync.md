@@ -1,6 +1,6 @@
 # Offline and Sync Contract
 
-This describes the target protocol. **M0 has no network transport.** `syncPending`
+This describes the target protocol. **M1 has no network transport.** `syncPending`
 returns disabled without sending, acknowledging or dropping an event. The pinned
 Supabase SDK is reserved for M2 and is not imported by the browser runtime.
 
@@ -43,7 +43,7 @@ The cloud rejects duplicate event ids. A client stores applied remote event ids 
 ## Background sync warning
 Browser background sync is an enhancement, not a correctness dependency. The app also syncs on launch, reconnect, focus, and an explicit Sync button.
 
-The preceding triggers are the M2 target. M0 shows a live local queue count and
+The preceding triggers are the M2 target. M1 shows a live local queue count and
 failed count without an actionable Sync button or any implication of cloud backup.
 
 ## Implemented atomic boundary
@@ -54,15 +54,44 @@ all inside it. A final audit-write failure aborts the entire operation. IndexedD
 serializes overlapping transactions on one origin/database, including other tabs.
 This does not coordinate independent offline devices.
 
-`createSale` accepts a stable command UUID. Repeating the same command returns its
-original result without a second sale/movement/outbox. A different payload under
-that ID fails. UI prevents overlapping submits. M1 must extend this to receipts,
-expenses and persist interrupted form intent; a new command means a new operation.
+Reporting queues its readonly queries synchronously in one Dexie transaction,
+then computes the scoped report from the completed snapshot. Do not await nested
+report loops inside an otherwise idle readonly transaction: real-browser testing
+caught an early-commit error that fake IndexedDB did not reproduce. See
+[Dexie transaction lifetime guidance](https://dexie.org/docs/DexieErrors/Dexie.PrematureCommitError).
+
+All M1 commands use stable UUIDs and a canonical payload fingerprint. `commands`
+stores the original result inside the same transaction as business records,
+audit and outbox. Identical retries return that result; changed data under the
+same ID fails. This covers sales, receipts, expenses, stock adjustment, catalog,
+accounts, suppliers, cash open/close and store setup. Old service callers may omit
+the command UUID to express a new operation; every current UI supplies one.
+
+`drafts` persists each form's UUID/input in IndexedDB. Submit waits for the draft
+write, then commits the command. Successful forms lock until explicit New; on
+reload the saved command receipt locks them even if confirmation was lost. Two
+tabs using the same persisted draft retry the same intent. Independent new
+commands remain distinct real operations; similarity alone never deduplicates
+two legitimate sales. Drafts are shared per location/form on this browser profile;
+use one operator tab for independent customers. No primary business localStorage.
+
+New outbox bundles use schemaVersion 2; existing v1 payloads remain verbatim.
+Events and command receipts have distinct stable IDs. No local setup/member
+claim authorizes an upload. M2 must explicitly enroll/import trusted local scope
+and validate event versions and every claimed actor/reference server-side.
 
 ## IndexedDB migrations and recovery
 
 - v1 remains declared; v2 adds hierarchy/audit/checkpoint/applied-event stores and
   a location+product movement index. No business history is cleared or rewritten.
+- v3 adds purchase/supplier/payable/valuation/command/draft/revision tables and
+  the payment cash-session index. Existing scoped products/accounts gain explicit
+  availability and version metadata. Open v2 cash sessions freeze prior scoped
+  timestamp-attributed payments as `legacyNetCentavos`; new payments use session
+  IDs. Closed cash snapshots, old sales/payments/expenses/outbox stay unchanged.
+  An old abono gets a separate payable only if exactly one owner is known; ambiguous
+  owner funding stays visible for review. Migration runs atomically and does not
+  emit fabricated new events for already-existing operations.
 - Upgraded legacy data is marked in settings and remains in the default database.
   Old unscoped payloads are not silently enriched, replayed or uploaded. A reviewed
   import/mapping with owner verification is required before M2 can accept them.

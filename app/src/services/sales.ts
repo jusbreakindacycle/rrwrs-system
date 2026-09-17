@@ -1,115 +1,52 @@
 import { db } from '../db/database'
-import type { PaymentEntry, Sale, SaleLine, StockMovement } from '../domain/types'
-import { assertCentavos, assertQuantity } from '../domain/money'
-import { localContext, localWrite, queueEvent, validateAccount } from './local-context'
+import { assertCentavos, assertQuantity, proportionalCentavos } from '../domain/money'
+import type { Sale, SaleLine, StockMovement } from '../domain/types'
+import { executeCommand, type CommandInput } from './commands'
+import { postPayment } from './payments'
+import { postStock, scopedProduct, stockPosition } from './stock'
 
-export async function createSale(input: {
-  businessId: string
-  productId: string
-  quantity: number
-  paymentAccountId: string
-  locationId?: string
-  commandId?: string
-}) {
-  return localWrite(async () => {
-  const context = await localContext(input.businessId, input.locationId)
-  if (input.commandId) {
-    const existing = await db.sales.get(input.commandId)
-    if (existing) {
-      const line = await db.saleLines.where('saleId').equals(existing.id).first()
-      const payment = await db.paymentEntries.where('saleId').equals(existing.id).first()
-      if (existing.businessId !== input.businessId || existing.locationId !== context.locationId ||
-        line?.productId !== input.productId || line.quantity !== input.quantity || payment?.accountId !== input.paymentAccountId) {
-        throw new Error('This command ID already belongs to a different sale.')
+export interface SaleItemInput { productId: string; quantity: number; expectedVersion?: number; expectedPriceCentavos?: number }
+export type SaleInput = CommandInput & {
+  productId?: string; quantity?: number; paymentAccountId?: string
+  lines?: SaleItemInput[]
+  payments?: { accountId: string; amountCentavos: number }[]
+}
+
+export function createSale(input: SaleInput) {
+  return executeCommand('sale_bundle', input, async (context, id, now) => {
+    const items = input.lines ?? [{ productId: input.productId ?? '', quantity: input.quantity ?? NaN }]
+    if (!items.length || items.length > 100) throw new Error('A sale needs 1–100 items.')
+    const lines: SaleLine[] = []
+    const stockMovements: StockMovement[] = []
+    for (const item of items) {
+      const product = await scopedProduct(context, item.productId)
+      assertQuantity(item.quantity, product.baseUnit !== 'kg')
+      if ((product.domainKind === 'rice_grain' || product.baseUnit === 'kg' && product.domainKind === undefined) && item.quantity < 1) throw new Error('Rice sales start at 1 kg.')
+      if (item.expectedVersion !== undefined && item.expectedVersion !== (product.version ?? 1) || item.expectedPriceCentavos !== undefined && item.expectedPriceCentavos !== product.priceCentavos) throw new Error('The price or product changed. Review the current catalog before finalizing.')
+      const quantityMilliunits = Math.round(item.quantity * 1000)
+      const lineTotalCentavos = proportionalCentavos(product.priceCentavos, quantityMilliunits, 1000)
+      assertCentavos(lineTotalCentavos)
+      let costCentavos = proportionalCentavos(product.estimatedCostCentavos, quantityMilliunits, 1000)
+      if (product.inventoryTracked) {
+        const position = await stockPosition(context, product)
+        if (position.quantityMilliunits < Math.round(item.quantity * 1000)) throw new Error(`Insufficient stock for ${product.name}.`)
+        costCentavos = proportionalCentavos(position.valueCentavos, quantityMilliunits, position.quantityMilliunits)
+        stockMovements.push(await postStock(context, product, -item.quantity, -costCentavos, id, 'sale', now))
       }
-      return existing
+      assertCentavos(costCentavos, true)
+      lines.push({ id: crypto.randomUUID(), saleId: id, productId: product.id, productName: product.name, quantity: item.quantity, baseQuantity: item.quantity, unitLabel: product.unitLabel, unitPriceCentavos: product.priceCentavos, productVersion: product.version ?? 1, costCentavos, costKnown: product.inventoryTracked || product.costKnown !== false, lineTotalCentavos })
     }
-  }
-  const product = await db.products.get(input.productId)
-  const business = await db.businesses.get(input.businessId)
-  if (!product?.active || !business || product.businessId !== business.id || product.workspaceId !== context.workspaceId) throw new Error('Product or business not found')
-  assertQuantity(input.quantity, product.baseUnit !== 'kg')
-  if (product.baseUnit === 'kg' && input.quantity < 1) throw new Error('Rice sales start at 1 kg.')
-  await validateAccount(context, input.paymentAccountId)
-
-  const saleId = input.commandId ?? crypto.randomUUID()
-  const now = new Date().toISOString()
-  const total = Math.round(product.priceCentavos * input.quantity)
-  const cost = Math.round(product.estimatedCostCentavos * input.quantity)
-  assertCentavos(total)
-  assertCentavos(cost, true)
-
-  if (product.inventoryTracked) {
-    const movements = await db.stockMovements.where('[locationId+productId]').equals([context.locationId, product.id]).toArray()
-    const onHand = movements.reduce((sum, m) => sum + m.quantityDelta, 0)
-    if (onHand < input.quantity) throw new Error(`Insufficient stock. On hand: ${onHand} ${product.unitLabel}`)
-  }
-
-  const sale: Sale = {
-    ...context,
-    id: saleId,
-    businessId: business.id,
-    locationName: context.locationName,
-    createdAt: now,
-    actorId: context.actorId,
-    totalCentavos: total,
-    status: 'finalized',
-    syncStatus: 'queued'
-  }
-
-  const line: SaleLine = {
-    id: crypto.randomUUID(),
-    saleId,
-    productId: product.id,
-    productName: product.name,
-    quantity: input.quantity,
-    baseQuantity: input.quantity,
-    unitLabel: product.unitLabel,
-    unitPriceCentavos: product.priceCentavos,
-    costCentavos: cost,
-    lineTotalCentavos: total
-  }
-
-  const payment: PaymentEntry = {
-    ...context,
-    id: crypto.randomUUID(),
-    saleId,
-    businessId: business.id,
-    accountId: input.paymentAccountId,
-    amountCentavos: total,
-    direction: 'in',
-    kind: 'sale',
-    createdAt: now
-  }
-
-  const stockMovement: StockMovement | undefined = product.inventoryTracked
-    ? {
-        ...context,
-        id: crypto.randomUUID(),
-        businessId: business.id,
-        productId: product.id,
-        quantityDelta: -input.quantity,
-        reason: 'sale',
-        referenceType: 'sale',
-        referenceId: saleId,
-        createdAt: now
-      }
-    : undefined
-
+    const totalCentavos = lines.reduce((sum, line) => sum + line.lineTotalCentavos, 0)
+    assertCentavos(totalCentavos)
+    const allocations = input.payments ?? [{ accountId: input.paymentAccountId ?? '', amountCentavos: totalCentavos }]
+    if (!allocations.length || allocations.length > 10) throw new Error('Choose 1–10 payment allocations.')
+    allocations.forEach(p => assertCentavos(p.amountCentavos))
+    if (allocations.reduce((sum, p) => sum + p.amountCentavos, 0) !== totalCentavos) throw new Error('Payments must equal the sale total. Customer credit is not supported.')
+    const sale: Sale = { ...context, id, createdAt: now, totalCentavos, status: 'finalized', syncStatus: 'queued' }
     await db.sales.add(sale)
-    await db.saleLines.add(line)
-    await db.paymentEntries.add(payment)
-    if (stockMovement) await db.stockMovements.add(stockMovement)
-    await queueEvent({
-      businessId: business.id,
-      locationId: context.locationId,
-      entityType: 'sale_bundle',
-      entityId: saleId,
-      operation: 'create',
-      payload: { sale, lines: [line], payments: [payment], stockMovements: stockMovement ? [stockMovement] : [] },
-      occurredAt: now
-    })
-
-  return sale
+    await db.saleLines.bulkAdd(lines)
+    const payments = []
+    for (const p of allocations) payments.push(await postPayment(context, p.accountId, p.amountCentavos, 'in', 'sale', id, now))
+    return { result: sale, payload: { sale, lines, payments, stockMovements } }
   })
 }
