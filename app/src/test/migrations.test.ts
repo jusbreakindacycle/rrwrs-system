@@ -57,7 +57,10 @@ it('upgrades scoped v2 sessions and abono while preserving payments, sales and p
   const expense = { ...scope, id: crypto.randomUUID(), createdAt: time, category: 'Repair', amountCentavos: 15000, fundedByOwner: true, paidFromAccountId: 'owner-personal' }
   const sale = { ...scope, id: crypto.randomUUID(), totalCentavos: 5500, status: 'finalized', createdAt: time }
   const event = { ...scope, id: crypto.randomUUID(), entityType: 'sale_bundle', entityId: sale.id, payload: { sale, originalVersion: true }, syncState: 'pending', schemaVersion: 1, attempts: 0 }
+  const audit = { ...scope, id: crypto.randomUUID(), eventId: event.id, entityType: 'sale_bundle', entityId: sale.id, operation: 'create', occurredAt: time, actorId: ids.actor }
+  const movement = { ...scope, id: crypto.randomUUID(), productId: ids.sinandomeng, quantityDelta: -1, reason: 'sale', referenceType: 'sale', referenceId: sale.id, createdAt: time }
   await old.table('paymentEntries').add(payment); await old.table('expenses').add(expense); await old.table('sales').add(sale); await old.table('outbox').add(event)
+  await old.table('auditEvents').add(audit); await old.table('stockMovements').add(movement)
   old.close()
   const next = new BusinessDatabase(name)
   try {
@@ -68,6 +71,8 @@ it('upgrades scoped v2 sessions and abono while preserving payments, sales and p
     expect(await next.expenses.get(expense.id)).toEqual(expense)
     expect(await next.sales.get(sale.id)).toEqual(sale)
     expect(await next.outbox.get(event.id)).toEqual(event)
+    expect(await next.auditEvents.get(audit.id)).toEqual(audit)
+    expect(await next.stockMovements.get(movement.id)).toEqual(movement)
     expect((await next.ownerPayables.toArray())[0]).toMatchObject({ expenseId: expense.id, ownerId: ids.actor, amountCentavos: 15000 })
     expect((await next.products.get(ids.sinandomeng))).toMatchObject({ domainKind: 'rice_grain', version: 1, locationIds: [ids.riceLocation] })
     expect(await next.commands.count()).toBe(0)

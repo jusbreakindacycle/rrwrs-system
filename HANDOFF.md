@@ -4,14 +4,37 @@
 
 The existing AGENTS, prior HANDOFF, README, numbered specifications, implementation,
 tests and PWA were inspected before changes. M0 was retained. Work is on
-`milestone-1/core-local-operations`. No commit, push, merge, deployment or remote
-project modification is part of this task. No credentials were introduced.
+`milestone-1/core-local-operations`. The original implementation was subsequently
+committed and pushed as `c00f7c1`. PR review follow-up is authorized to commit and
+push fixes on this branch; it must not merge, deploy or modify remote data projects.
+No credentials were introduced.
 
 M1 implements trusted local store operations. **Not production-ready:** there is
 no authenticated staff access, remote owner monitoring, secure synchronization,
 financial correction approval or backup/restore. Cloud transport is hard-disabled.
 M1 acceptance for trusted local operations is met with the evidence below. This
 does not establish the later production-readiness gates.
+
+## PR review follow-up (2026-09-17)
+
+PR [#1](https://github.com/jusbreakindacycle/rrwrs-system/pull/1) targets `main`
+from `milestone-1/core-local-operations`. Initial comparison was one commit ahead,
+zero behind, 40 changed files; only `c00f7c1` was included. No equivalent PR existed.
+
+Review found a cash-close browser-test race: the assertion matched the unsaved
+variance preview, allowing reload before commit. Both original push and PR CI
+failed this assertion. The test now waits for a reconciliation-history article
+and verifies the persisted closed status, expected cash, count, variance and note.
+The v2 migration fixture additionally verifies unchanged audit and stock movement
+rows. The product brief now describes M1 local setup rather than M0 demo-only use.
+No application behavior, schema, dependencies or workflow gates were changed.
+
+Review covered the actual branch diff, financial/inventory commands, scope and
+retry checks, migration retention, PWA behavior, history/reporting, and tracked
+files. No credentials or generated build/test artifacts were found in the diff.
+Cloud remains disabled; no merge, deployment or remote data changes were made.
+See `docs/05-acceptance-criteria.md` for review validation and PR checks for the
+latest remote result; prior local results are not a substitute for green CI.
 
 ## Delivered implementation
 

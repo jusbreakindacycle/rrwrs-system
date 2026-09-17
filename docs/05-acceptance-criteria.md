@@ -97,6 +97,32 @@ deployment, production database, authenticated RLS or two-device synchronization
 test was performed. Physical Android install, abrupt power loss and backup
 recovery remain unverified; see the red-team residual risks.
 
+## PR review validation (2026-09-17)
+
+PR [#1](https://github.com/jusbreakindacycle/rrwrs-system/pull/1) exposed two CI
+failures in the cash-overage browser scenario. The pre-reload assertion matched
+an editable preview before cash close committed. It now waits for saved history
+and asserts the stored status, expected/actual cash, variance and explanation.
+All original after-reload and financial assertions remain. Migration assertions
+now also verify verbatim preservation of existing audit and stock movement rows.
+
+- Baseline and post-fix `npm run check`: passed (63 tests, typecheck, lint, standard PWA build).
+- Targeted `npx vitest run src/test/migrations.test.ts` from `app`: 3 passed.
+- `npm audit`: zero vulnerabilities; dependencies unchanged.
+- Initial local `npm run test:e2e`: both builds passed, 11 browser cases passed,
+  one standard-PWA installation timed out. A concurrent check rebuilt the served
+  directory; the trace showed an unsupported HTML MIME type for the worker script.
+  This run is not acceptance evidence. Builds and browser verification must run
+  serially against stable output.
+- Final isolated `npx playwright test` from `app`: all 12 passed in 5.8m against
+  the completed standard/demo builds, including the strengthened close assertions.
+- Final `git diff --check`: passed. Desktop/mobile sale, cash/dashboard and stock
+  screenshots were inspected. Total remains 75 cases (63 unit/integration + 12
+  browser); the targeted migration run is a subset, not three additional cases.
+
+The review fix requires fresh green PR CI before merge. Its exact workflow result
+is available on PR #1. No merge or production-readiness claim is made by these tests.
+
 ## Phase 1 release targets (later milestone gates still apply)
 
 1. A previously installed store device can open the app and create a sale with airplane mode enabled.

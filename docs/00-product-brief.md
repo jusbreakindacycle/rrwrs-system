@@ -11,8 +11,9 @@ Give small owner-run businesses one practical system for daily operations while 
 
 Android phones/tablets, Windows laptops/desktops and modern browsers. Remain a
 web application and installable PWA; normal local operations cannot require cloud.
-The current M0 practice workspace is explicitly demo-only. Provisioning and remote
-owner monitoring are later milestones, not implied by the combined local dashboard.
+M1 supports explicit empty setup on a trusted local device and a separate demo
+workspace. Local profiles are not authentication. Secure provisioning and remote
+owner monitoring remain M2, not implied by the combined local dashboard.
 
 ## Initial businesses
 - Water refilling station

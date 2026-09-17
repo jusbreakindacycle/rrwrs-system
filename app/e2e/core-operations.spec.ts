@@ -153,7 +153,10 @@ test('offline cash and electronic payments, business expense and abono retain in
   await page.getByLabel('Actual cash counted').fill('1160')
   await page.getByLabel('Variance explanation').fill('Recounted; ten pesos over')
   await page.getByRole('button', { name: 'Close and reconcile' }).click()
-  await expect(page.getByText('Variance ₱10.00 · Overage')).toBeVisible()
+  // The editable count preview already displays this variance. Wait for the
+  // committed history row before reload, otherwise navigation can abort close.
+  await expect(page.locator('article.history-entry').getByText('Variance ₱10.00 · Overage')).toBeVisible()
+  expect((await records(page, 'cashSessions'))[0]).toMatchObject({ status: 'closed', expectedClosingCentavos: 115000, actualClosingCentavos: 116000, varianceCentavos: 1000, note: 'Recounted; ten pesos over' })
   await page.reload()
   await expect(page.getByRole('heading', { name: '₱340.00', exact: true })).toBeVisible()
   await expect(page.getByText('Variance ₱10.00 · Overage')).toBeVisible()

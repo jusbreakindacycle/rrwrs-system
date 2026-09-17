@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | Internet disappears during sale | Local commit has no network dependency; browser offline test | M0 |
 | Tab closes immediately after success | Reopen/reload shows committed sale, queue and stock; browser test. Power-cut durability not proven | M0 / M7 |
+| Reload before cash close commits | An unsaved variance preview is not confirmation. Wait for reconciliation history; interrupted work remains a draft. PR review strengthened the browser test to check the closed record and its count/explanation before reload | M1 |
 | Submit twice | Every M1 command stores its result atomically. Same UUID/payload returns it; changed payload is rejected. Durable drafts remain locked after success/reload | M1 |
 | Same outbox pushed twice | Immutable same-ID acknowledgement; changed payload rejected. Transport disabled today | M2 |
 | Response lost after server commit | Retry same ID, retain local pending record until acknowledgement | M2 |
