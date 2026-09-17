@@ -6,6 +6,7 @@ import { closeCashSession, openCashSession, calculateExpectedCash, receiveStock,
 import { getDashboard, getInventory } from '../services/analytics'
 import { syncPending } from '../services/sync'
 import { assertCentavos, assertQuantity, toCentavos } from '../domain/money'
+import { stockPosition } from '../services/stock'
 
 beforeEach(async () => {
   await db.delete()
@@ -14,7 +15,7 @@ beforeEach(async () => {
 })
 afterAll(() => db.delete())
 
-const riceSale = () => ({ businessId: ids.rice, productId: ids.sinandomeng, quantity: 5, paymentAccountId: ids.riceCash })
+const riceSale = () => ({ businessId: ids.rice, productId: ids.sinandomeng, quantity: 5, paymentAccountId: ids.gcash })
 
 describe('local foundation', () => {
   it('seeds once across concurrent initializations with separate locations and stable device identity', async () => {
@@ -35,7 +36,7 @@ describe('local foundation', () => {
     expect((await getInventory(ids.rice)).find(x => x.product.id === ids.sinandomeng)?.onHand).toBe(95)
     expect(await db.auditEvents.count()).toBe(1)
     const event = await db.outbox.toCollection().first()
-    expect(event).toMatchObject({ locationId: ids.riceLocation, workspaceId: ids.workspace, schemaVersion: 1, attempts: 0, syncState: 'pending' })
+    expect(event).toMatchObject({ locationId: ids.riceLocation, workspaceId: ids.workspace, schemaVersion: 2, attempts: 0, syncState: 'pending' })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
@@ -53,7 +54,7 @@ describe('local foundation', () => {
     expect(await db.sales.count()).toBe(1)
     expect(await db.outbox.count()).toBe(1)
     expect(await db.stockMovements.where('reason').equals('sale').count()).toBe(1)
-    await expect(createSale({ ...input, quantity: 6 })).rejects.toThrow('different sale')
+    await expect(createSale({ ...input, quantity: 6 })).rejects.toThrow('different')
   })
 
   it('serializes competing local stock checks', async () => {
@@ -86,8 +87,10 @@ describe('local foundation', () => {
   })
 
   it('receives stock as purchase outflow, updates weighted average, and does not create expense', async () => {
+    await openCashSession(ids.rice, ids.riceCash, 500000)
     await receiveStock({ businessId: ids.rice, productId: ids.sinandomeng, quantity: 100, totalCostCentavos: 490000, paidFromAccountId: ids.riceCash })
-    expect((await db.products.get(ids.sinandomeng))?.estimatedCostCentavos).toBe(4800)
+    const position = await stockPosition({ workspaceId: ids.workspace, businessId: ids.rice, locationId: ids.riceLocation }, (await db.products.get(ids.sinandomeng))!)
+    expect(position.valueCentavos / (position.quantityMilliunits / 1000)).toBe(4800)
     expect((await getInventory(ids.rice)).find(x => x.product.id === ids.sinandomeng)?.onHand).toBe(200)
     expect(await db.expenses.count()).toBe(0)
     expect((await db.paymentEntries.toCollection().first())?.kind).toBe('purchase')
@@ -95,13 +98,15 @@ describe('local foundation', () => {
 
   it('retains owner funding without reducing the drawer and records cash variance', async () => {
     const session = await openCashSession(ids.rice, ids.riceCash, 100000)
-    await createSale(riceSale())
+    await createSale({ ...riceSale(), paymentAccountId: ids.riceCash })
     await recordExpense({ businessId: ids.rice, category: 'Repair', amountCentavos: 10000, paidFromAccountId: ids.riceCash, fundedByOwner: true })
     expect(await calculateExpectedCash(session)).toBe(127500)
     await recordExpense({ businessId: ids.rice, category: 'Utilities', amountCentavos: 5000, paidFromAccountId: ids.riceCash, fundedByOwner: false })
-    expect(await closeCashSession(session.id, 122000)).toEqual({ expected: 122500, variance: -500 })
+    expect(await closeCashSession(session.id, 122000, { note: 'Counted short by five pesos' })).toEqual({ expected: 122500, variance: -500 })
     const closed = await db.cashSessions.get(session.id)
-    await createSale(riceSale())
+    await expect(createSale({ ...riceSale(), paymentAccountId: ids.riceCash })).rejects.toThrow('Open a cash session')
+    await openCashSession(ids.rice, ids.riceCash, 122000)
+    await createSale({ ...riceSale(), paymentAccountId: ids.riceCash })
     expect(await calculateExpectedCash(closed!)).toBe(122500)
     expect(await db.expenses.count()).toBe(2)
   })

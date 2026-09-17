@@ -27,6 +27,14 @@ workflow is separate from parent-directory scheduled report-only triage loops.
 - Integer centavos; finite validated quantities; kg is rice's base inventory unit.
 - Shared core in `domain/`, `db/`, `services/`; module rules must not leak into money.
 - Explicit workspace/business/location scope. A business is not a location.
+- M1 UI drafts persist command UUIDs in IndexedDB. Completed drafts stay locked
+  until an explicit new operation. Every mutating form must use this contract.
+- Cash entries require an open session and carry its ID. Closed expected/actual
+  counts and variances are historical snapshots; never recompute them from later
+  payments. Abono creates an owner payable with no business payment.
+- Catalog revisions retain identity/unit behavior and optimistic versions. Sale
+  lines freeze price, cost and product version. Location valuation is separate
+  from product pricing. Quantity is derived from the movement ledger.
 - No network requests inside local transactions. Read/validate/write all related
   rows, audit and outbox in one Dexie transaction. Never catch a failed write inside
   that transaction and continue. Stable command/event IDs must survive retries.

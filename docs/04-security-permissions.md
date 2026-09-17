@@ -1,7 +1,8 @@
 # Security and Permissions
 
-Permissions below are the target production model. M0 has no authenticated user
-sessions or production workspace provisioning. Demo roles are fixtures only.
+Permissions below are the target production model. M1 has no authenticated user
+sessions or production workspace provisioning. A trusted local profile is not
+server identity; demo and local setup cannot grant remote access.
 
 ## Store Operator
 Can:
@@ -36,12 +37,22 @@ Can perform store operations plus:
 - Every high-risk change produces an audit event.
 - Local-device lock/session timeout is recommended for shared store hardware.
 
-## M0 boundary and M2 authorization gate
+## M1 boundary and M2 authorization gate
 
-The standard build accepts no operational input; the isolated demo can exercise
-local services. `localContext` checks business/location relationships and account
-scope. These are validation checks, not security against a device owner who can
-edit IndexedDB. Browser storage is not encrypted or tamper-proof by this app.
+The standard build allows explicit setup of an empty local workspace; sample
+data remains confined to the demo. `localContext` checks active workspace member,
+owner/operator role, location grant, business/location relationships and device
+identity. Products/accounts must belong to that workspace/business and be available
+at the selected location. Owner-only services manage master data, store setup and
+explained stock adjustments; operators may perform normal assigned store operations.
+Reports filter by current local grants. There is no role-switching/sign-in UI or
+membership management until M2. Local setup creates the trusted owner profile.
+
+These are validation checks, not security against a device owner who can edit
+IndexedDB. Browser storage is not encrypted or tamper-proof by this app. Use trusted
+hardware/profiles only; no claim of secure shared-device staff access is made.
+Removed local grants reject subsequent writes, but independent devices cannot
+learn remote revocation in this milestone.
 
 Cloud transport is hard-disabled, including when public environment variables
 are provided. No browser client, automatic upload, background request or anonymous

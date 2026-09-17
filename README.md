@@ -4,9 +4,10 @@ Mobile-first, local-first Water Refilling Station and Bigasan management PWA.
 React + TypeScript + Vite + Dexie/IndexedDB. Supabase is reserved for authenticated
 remote synchronization in Milestone 2.
 
-**Current stage: Milestone 0 foundation. Practice use only; not production-ready.**
-The existing sale/receiving/expense/cash prototypes are preserved and tested as
-foundation smoke flows. They do not establish completion of Milestone 1.
+**Current stage: Milestone 1 core local operations. Not production-ready.**
+Catalog, configurable accounts, sales, stock receiving, expenses/abono, explicit
+cash sessions, reconciliation and local owner reports are implemented. Cloud
+transport remains disabled. See the handoff for executed validation and limits.
 
 ## Start (repository root)
 
@@ -19,8 +20,38 @@ npm run dev:demo
 
 The demo opens two sample businesses at separate locations with sample prices,
 stock and payment accounts. It uses the isolated `RRWRS-Demo` IndexedDB database.
-It never synchronizes. `npm run dev` opens the unseeded production-setup shell.
-Both run at the URL printed by Vite. No environment values are needed for M0.
+It never synchronizes. `npm run dev` opens an unseeded local-workspace setup form.
+Both run at the URL printed by Vite. No environment values are needed for M1.
+
+## Local store workflow
+
+1. In the standard build, explicitly create the workspace, owner profile, first
+   Water/Rice business and location. This trusted-device profile is not sign-in.
+   Setup creates one empty cash drawer, no sample products, stock or transactions.
+2. Choose the business/location in the header. **Manage** adds products/services,
+   current prices, location availability, payment accounts and suppliers. Additional
+   businesses and locations can be added without equating a business to a branch.
+3. In **Ops → Cash close**, enter the physically available opening float before
+   accepting or spending cash. Electronic accounts do not need a cash session.
+4. Receive paid stock in **Ops**, using total kg for rice or whole containers.
+   Supplier references prevent a second receipt of the same supplier document.
+   **Stock** supports owner-only, explained opening/manual movements; no direct
+   stock balance edit exists. Paid stock acquisition belongs in receiving.
+5. **Sale** supports a quick item or a basket. All selected items are fully paid to
+   one selected account in the current UI. The service model supports split
+   allocations; split-payment entry belongs to M6. A refill does not consume new
+   containers; a separately selected container does.
+6. Record operating expenses in **Ops**. Choose the paying owner for abono. It
+   creates an owner payable and no store payment. Reimbursement is deferred to M6.
+7. Count and close the drawer. A shortage/overage requires an explanation and
+   stays visible. **Overview** reports Philippine-date sales, estimated gross
+   profit, payment mix, outflows, owner payables and cash variance. **History**
+   exposes finalized records and audit entries without edit/delete actions.
+
+Completed forms remain locked across reloads. Use **New sale/receipt/expense**
+for a new operation; retrying the existing form returns the original transaction.
+Cash opening is a float, not revenue. No transfer, withdrawal, contribution or
+reimbursement should be entered through sales or operating expenses.
 
 ## Build and offline preview
 
@@ -34,7 +65,7 @@ disconnect and reload. Android installability requires HTTPS; localhost is suita
 for desktop testing. An ordinary LAN HTTP address is not an Android PWA test.
 Use a stable origin: browser storage is scoped by protocol, host and port.
 
-`npm run build` creates the unseeded shell in `app/dist`.
+`npm run build` creates the unseeded local setup/application in `app/dist`.
 `npm run build:demo` creates practice assets in `app/dist-demo`.
 `npm run preview` previews `app/dist`. These are local previews, not deployments.
 The app waits for all tabs to close before activating an update; it does not force
@@ -69,9 +100,16 @@ GitHub Actions runs the same checks; a local pass is not a claimed CI run.
 
 ## Security and data
 
-The standard database name remains `LocalFirstBusinessManager`. An existing v1
-database upgrades additively; old rows and queued payloads remain verbatim. They
-are not reclassified as authenticated data. No delete/reseed recovery is automatic.
+The standard database name remains `LocalFirstBusinessManager`. IndexedDB v3
+adds purchase, supplier, owner-payable, valuation, command-receipt, draft and product
+revision stores. v1/v2 history and queued payloads are retained. v2 catalog metadata
+and open cash sessions are upgraded additively; old expense owner liability is
+recovered only when a single owner is unambiguous. No delete/reseed is automatic.
+
+Local scope/role checks protect application workflows, not against a person with
+browser developer tools or access to the device. There is no authenticated remote
+owner monitoring yet. Keep independent records until secure sync, correction and
+backup/recovery gates pass. Losing browser data currently has no app recovery path.
 
 Copy `.env.example` to `app/.env.local` only when M2 provides secure synchronization.
 All `VITE_` values are public. Never put secrets/service-role keys there. Setting

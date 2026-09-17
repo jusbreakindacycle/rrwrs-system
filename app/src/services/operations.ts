@@ -1,123 +1,108 @@
 import { db } from '../db/database'
-import type { CashSession, Expense, PaymentEntry, StockMovement } from '../domain/types'
-import { assertCentavos, assertQuantity } from '../domain/money'
-import { localContext, localWrite, queueEvent, validateAccount } from './local-context'
+import type { CashSession, Expense, OwnerPayable, PaymentEntry, Purchase, PurchaseLine } from '../domain/types'
+import { assertCentavos, assertId, assertQuantity, requiredText } from '../domain/money'
+import { localContext, validateAccount } from './local-context'
+import { executeCommand, type CommandInput } from './commands'
+import { postPayment } from './payments'
+import { postStock, scopedProduct, stockPosition } from './stock'
 
-export async function receiveStock(input: {
-  businessId: string
-  productId: string
-  quantity: number
-  totalCostCentavos: number
-  paidFromAccountId: string
-}) {
-  return localWrite(async () => {
-  const context = await localContext(input.businessId)
-  assertQuantity(input.quantity)
-  assertCentavos(input.totalCostCentavos)
-  await validateAccount(context, input.paidFromAccountId)
-  const product = await db.products.get(input.productId)
-  if (!product?.active || !product.inventoryTracked || product.businessId !== input.businessId || product.workspaceId !== context.workspaceId) throw new Error('Choose an inventory-tracked product for this business.')
-  assertQuantity(input.quantity, product.baseUnit !== 'kg')
+export const expenseCategories = ['Utilities', 'Rent', 'Fuel / delivery', 'Maintenance', 'Repair', 'Filters / treatment', 'Packaging', 'Permits / laboratory', 'Other'] as const
 
-  const now = new Date().toISOString()
-  const purchaseId = crypto.randomUUID()
-  const movements = await db.stockMovements.where('[locationId+productId]').equals([context.locationId, product.id]).toArray()
-  const oldQty = movements.reduce((s, m) => s + m.quantityDelta, 0)
-  if (oldQty < 0) throw new Error('Negative stock requires reconciliation before costing a receipt.')
-  const oldValue = Math.max(0, oldQty) * product.estimatedCostCentavos
-  const receivedUnitCost = Math.round(input.totalCostCentavos / input.quantity)
-  const newQty = Math.max(0, oldQty) + input.quantity
-  const newAverageCost = newQty > 0 ? Math.round((oldValue + input.totalCostCentavos) / newQty) : receivedUnitCost
-
-  const movement: StockMovement = {
-    ...context,
-    id: crypto.randomUUID(), businessId: input.businessId, productId: input.productId,
-    quantityDelta: input.quantity, reason: 'purchase', referenceType: 'purchase', referenceId: purchaseId, createdAt: now
-  }
-  const payment: PaymentEntry = {
-    ...context,
-    id: crypto.randomUUID(), businessId: input.businessId, accountId: input.paidFromAccountId,
-    amountCentavos: input.totalCostCentavos, direction: 'out', kind: 'purchase', createdAt: now
-  }
-
-    await db.stockMovements.add(movement)
-    await db.paymentEntries.add(payment)
-    await db.products.update(product.id, { estimatedCostCentavos: newAverageCost })
-    await queueEvent({ businessId: input.businessId, entityType: 'purchase_bundle', entityId: purchaseId, operation: 'create', payload: { purchaseId, productId: product.id, quantity: input.quantity, totalCostCentavos: input.totalCostCentavos, receivedUnitCost, newAverageCost, movement, payment }, occurredAt: now })
+export function receiveStock(input: CommandInput & { productId: string; quantity: number; totalCostCentavos: number; paidFromAccountId: string; supplierId?: string; reference?: string; note?: string }) {
+  return executeCommand('purchase_bundle', input, async (context, id, now) => {
+    assertCentavos(input.totalCostCentavos)
+    const product = await scopedProduct(context, input.productId)
+    if (!product.inventoryTracked) throw new Error('Choose an inventory-tracked product for this business.')
+    assertQuantity(input.quantity, product.baseUnit !== 'kg')
+    const position = await stockPosition(context, product)
+    if (position.quantityMilliunits < 0) throw new Error('Negative stock requires reconciliation before receiving.')
+    const supplier = input.supplierId ? await db.suppliers.get(input.supplierId) : undefined
+    if (input.supplierId && (!supplier?.active || supplier.businessId !== context.businessId || supplier.workspaceId !== context.workspaceId)) throw new Error('Choose an active supplier for this business.')
+    const reference = input.reference?.trim() ?? ''
+    if (reference.length > 100 || (input.note?.length ?? 0) > 500) throw new Error('Purchase reference or note is too long.')
+    if (supplier && reference && await db.purchases.where('businessId').equals(context.businessId).filter(p => p.supplierId === supplier.id && p.reference.toLowerCase() === reference.toLowerCase()).count()) throw new Error('This supplier reference has already been received. Review purchase history.')
+    const purchase: Purchase = { ...context, id, supplierId: supplier?.id, supplierName: supplier?.name ?? 'Unspecified supplier', reference, totalCostCentavos: input.totalCostCentavos, paidFromAccountId: input.paidFromAccountId, status: 'received', createdAt: now, note: input.note?.trim() ?? '' }
+    const line: PurchaseLine = { id: crypto.randomUUID(), purchaseId: id, productId: product.id, productName: product.name, quantity: input.quantity, unitLabel: product.unitLabel, totalCostCentavos: input.totalCostCentavos }
+    await db.purchases.add(purchase)
+    await db.purchaseLines.add(line)
+    const movement = await postStock(context, product, input.quantity, input.totalCostCentavos, id, 'purchase_receipt', now, purchase.note)
+    const payment = await postPayment(context, input.paidFromAccountId, input.totalCostCentavos, 'out', 'purchase', id, now)
+    return { result: purchase, payload: { purchase, lines: [line], movements: [movement], payments: [payment] } }
   })
 }
 
-export async function recordExpense(input: {
-  businessId: string
-  category: string
-  amountCentavos: number
-  paidFromAccountId: string
-  fundedByOwner: boolean
-  note?: string
-}) {
-  return localWrite(async () => {
-  const context = await localContext(input.businessId)
-  assertCentavos(input.amountCentavos)
-  if (!input.category.trim()) throw new Error('Expense category is required.')
-  if (!input.fundedByOwner) await validateAccount(context, input.paidFromAccountId)
-  const now = new Date().toISOString()
-  const expense: Expense = {
-    ...context,
-    id: crypto.randomUUID(), businessId: input.businessId, category: input.category,
-    amountCentavos: input.amountCentavos, paidFromAccountId: input.fundedByOwner ? context.actorId : input.paidFromAccountId,
-    fundedByOwner: input.fundedByOwner, note: input.note, createdAt: now
-  }
-
-    await db.expenses.add(expense)
-    let payment: PaymentEntry | undefined
-    if (!input.fundedByOwner) {
-      payment = {
-        ...context,
-        id: crypto.randomUUID(), businessId: input.businessId, accountId: input.paidFromAccountId,
-        amountCentavos: input.amountCentavos, direction: 'out', kind: 'expense', createdAt: now
-      }
-      await db.paymentEntries.add(payment)
+export function recordExpense(input: CommandInput & { category: string; amountCentavos: number; paidFromAccountId: string; fundedByOwner: boolean; ownerId?: string; note?: string }) {
+  return executeCommand('expense_bundle', input, async (context, id, now) => {
+    assertCentavos(input.amountCentavos)
+    if (!expenseCategories.some(c => c === input.category)) throw new Error('Choose an operating expense category. Inventory and owner money have separate workflows.')
+    if (typeof input.fundedByOwner !== 'boolean') throw new Error('Choose the expense funding source.')
+    const note = input.note?.trim() ?? ''
+    if (note.length > 500 || input.category === 'Other' && !note) throw new Error('Describe this expense in a note (maximum 500 characters).')
+    const ownerId = input.fundedByOwner ? input.ownerId ?? context.actorId : undefined
+    if (input.fundedByOwner) {
+      assertId(ownerId!)
+      const owner = await db.members.where('[workspaceId+userId]').equals([context.workspaceId, ownerId!]).first()
+      if (!owner?.active || owner.role !== 'owner') throw new Error('Select an active owner who paid personally.')
     }
-    await queueEvent({ businessId: input.businessId, entityType: 'expense_bundle', entityId: expense.id, operation: 'create', payload: { expense, payment, ownerPayableCentavos: input.fundedByOwner ? input.amountCentavos : 0 }, occurredAt: now })
-  return expense
+    const expense: Expense = { ...context, id, category: input.category, amountCentavos: input.amountCentavos, paidFromAccountId: ownerId ?? input.paidFromAccountId, fundedByOwner: input.fundedByOwner, ownerId, note, createdAt: now }
+    await db.expenses.add(expense)
+    let payable: OwnerPayable | undefined
+    if (ownerId) {
+      payable = { ...context, id: crypto.randomUUID(), ownerId, expenseId: id, amountCentavos: input.amountCentavos, createdAt: now, kind: 'expense_funding' }
+      await db.ownerPayables.add(payable)
+    }
+    const payment = ownerId ? undefined : await postPayment(context, input.paidFromAccountId, input.amountCentavos, 'out', 'expense', id, now)
+    return { result: expense, payload: { expense, payable, payment } }
   })
 }
 
-export async function getOpenCashSession(businessId: string, accountId: string) {
-  const sessions = await db.cashSessions.where('businessId').equals(businessId).filter(x => x.accountId === accountId && x.status === 'open').toArray()
-  return sessions.sort((a, b) => b.openedAt.localeCompare(a.openedAt))[0]
+export async function getOpenCashSession(businessId: string, accountId: string, locationId?: string) {
+  const context = await localContext(businessId, locationId)
+  await validateAccount(context, accountId, true)
+  return db.cashSessions.where('accountId').equals(accountId).filter(s => s.status === 'open' && s.businessId === businessId && s.locationId === context.locationId && s.workspaceId === context.workspaceId).first()
 }
 
-export async function openCashSession(businessId: string, accountId: string, openingCentavos: number) {
-  return localWrite(async () => {
-  const context = await localContext(businessId)
-  assertCentavos(openingCentavos, true)
-  await validateAccount(context, accountId, true)
-  const existing = await getOpenCashSession(businessId, accountId)
-  if (existing) throw new Error('A cash session is already open for this drawer.')
-  const session: CashSession = { ...context, id: crypto.randomUUID(), businessId, accountId, openedAt: new Date().toISOString(), openingCentavos, status: 'open' }
+export function openCashSession(businessId: string, accountId: string, openingCentavos: number, options: { locationId?: string; commandId?: string } = {}) {
+  const input = { businessId, accountId, openingCentavos, ...options }
+  return executeCommand('cash_open', input, async (context, id, now) => {
+    assertCentavos(openingCentavos, true)
+    await validateAccount(context, accountId, true)
+    if (await db.cashSessions.where('accountId').equals(accountId).filter(s => s.status === 'open').count()) throw new Error('A cash session is already open for this drawer.')
+    const session: CashSession = { ...context, id, accountId, openedAt: now, openingCentavos, status: 'open', cashModelVersion: 3, legacyNetCentavos: 0 }
     await db.cashSessions.add(session)
-    await queueEvent({ businessId, entityType: 'cash_session', entityId: session.id, operation: 'open', payload: session, occurredAt: session.openedAt })
-  return session
+    return { result: session, payload: { session }, operation: 'open' }
   })
 }
 
 export async function calculateExpectedCash(session: CashSession) {
   if (session.status === 'closed' && session.expectedClosingCentavos !== undefined) return session.expectedClosingCentavos
-  const entries = await db.paymentEntries.where('businessId').equals(session.businessId).filter(x => x.locationId === session.locationId && x.accountId === session.accountId && x.createdAt >= session.openedAt).toArray()
-  return entries.reduce((balance, entry) => balance + (entry.direction === 'in' ? entry.amountCentavos : -entry.amountCentavos), session.openingCentavos)
+  const entries = await db.paymentEntries.where('cashSessionId').equals(session.id).toArray()
+  return expectedCashFromEntries(session, entries)
 }
 
-export async function closeCashSession(sessionId: string, actualClosingCentavos: number) {
-  return localWrite(async () => {
-  assertCentavos(actualClosingCentavos, true)
-  const session = await db.cashSessions.get(sessionId)
-  if (!session || session.status !== 'open') throw new Error('Open cash session not found.')
-  const expected = await calculateExpectedCash(session)
-  const closedAt = new Date().toISOString()
-  const patch = { status: 'closed' as const, closedAt, expectedClosingCentavos: expected, actualClosingCentavos, varianceCentavos: actualClosingCentavos - expected }
-    await db.cashSessions.update(session.id, patch)
-    await queueEvent({ businessId: session.businessId, entityType: 'cash_session', entityId: session.id, operation: 'close', payload: { ...session, ...patch }, occurredAt: closedAt })
-  return { expected, variance: actualClosingCentavos - expected }
+export function expectedCashFromEntries(session: CashSession, entries: PaymentEntry[]) {
+  if (session.status === 'closed' && session.expectedClosingCentavos !== undefined) return session.expectedClosingCentavos
+  if (entries.some(p => p.accountId !== session.accountId || p.locationId !== session.locationId || p.workspaceId !== session.workspaceId || p.businessId !== session.businessId)) throw new Error('Cash ledger scope mismatch; owner review required.')
+  const expected = entries.reduce((sum, p) => sum + (p.direction === 'in' ? p.amountCentavos : -p.amountCentavos), session.openingCentavos + (session.legacyNetCentavos ?? 0))
+  if (!Number.isSafeInteger(expected)) throw new Error('Cash total exceeds supported precision.')
+  return expected
+}
+
+export async function closeCashSession(sessionId: string, actualClosingCentavos: number, options: { note?: string; commandId?: string } = {}) {
+  assertId(sessionId)
+  const found = await db.cashSessions.get(sessionId)
+  if (!found) throw new Error('Cash session not found.')
+  return executeCommand('cash_close', { businessId: found.businessId, locationId: found.locationId, sessionId, actualClosingCentavos, ...options } as CommandInput & { sessionId: string; actualClosingCentavos: number }, async (context, _id, now) => {
+    assertCentavos(actualClosingCentavos, true)
+    const session = await db.cashSessions.get(sessionId)
+    if (!session || session.status !== 'open') throw new Error('Open cash session not found.')
+    if (session.workspaceId !== context.workspaceId || session.businessId !== context.businessId || session.locationId !== context.locationId) throw new Error('Cash session scope mismatch. Records were preserved.')
+    const expected = await calculateExpectedCash(session)
+    const variance = actualClosingCentavos - expected
+    const note = variance === 0 ? options.note?.trim() ?? '' : requiredText(options.note ?? '', 'Variance explanation', 500)
+    if (note.length > 500) throw new Error('Note exceeds 500 characters.')
+    const closed: CashSession = { ...session, status: 'closed', closedAt: now, expectedClosingCentavos: expected, actualClosingCentavos, varianceCentavos: variance, note }
+    await db.cashSessions.put(closed)
+    return { result: { expected, variance }, payload: { session: closed }, entityId: sessionId, operation: 'close' }
   })
 }

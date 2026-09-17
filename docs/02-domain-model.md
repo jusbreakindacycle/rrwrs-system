@@ -62,7 +62,7 @@ A sale total and where it was paid are separate. Payment entries must sum to the
 - Station-owned gallon can move through loan/deposit/rental states
 - Consumables and treatment parts are tracked separately from refill revenue
 
-## Implemented M0 persistence vs target entities
+## Implemented persistence vs target entities
 
 `workspaces`, `businesses`, `locations`, `members`, `locationAccess`, `products`,
 `paymentAccounts`, `sales`, `saleLines`, `paymentEntries`, `stockMovements`,
@@ -77,19 +77,58 @@ integer centavos. UUID fixtures are demo-only; new event/transaction/device IDs
 are generated once and persisted. Versioned event bundles carry immutable content;
 delivery status/retry metadata can change independently.
 
-M0 operation views infer location only when exactly one active location exists.
-They reject ambiguity rather than silently choosing a branch. A multi-location
-picker and per-location valuation/account assignment belong in M1/M4.
+M1 v3 adds `suppliers`, `purchases`, `purchaseLines`, `ownerPayables`,
+`stockValuations`, `commands`, `drafts` and `productRevisions`. UI operations pass
+an explicit location. Service callers may omit it only when exactly one active
+location exists; ambiguous references are rejected.
 
-Still to implement: full suppliers/purchase headers/lines, price history, explicit
-owner payable/money ledger, correction records, stock counts, and module entities.
-Do not mistake a type/specification for a working lifecycle.
+Products carry domain kind, active state, availability locations, base unit, SKU,
+current price, version and optional primitive metadata. Price revisions snapshot
+the before/after product, actor and effective timestamp. Identity, unit and stock
+behavior cannot change on an existing product. Old sale lines retain their price,
+cost and version. Unknown service variable cost produces an incomplete-cost
+message rather than an invented gross profit. No free-form sale price override.
+
+Accounts carry type and availability. A new cash drawer belongs to one business
+and location; electronic accounts may be shared across explicitly selected
+workspace locations. Account kinds and ownership are immutable. Names/active
+state/availability have audited revisions. An open drawer cannot be deactivated.
+
+Cash opening records an observed float. Every subsequent cash sale, receipt and
+business expense carries `cashSessionId`. Electronic payments and abono do not
+enter the drawer. Close freezes expected/actual/variance and explanation; later
+sessions cannot change this snapshot. Negative expected cash is visible rather
+than silently balanced (owner review of opening/count/paid-from entry is needed).
+
+Each paid receipt has a header, line, supplier name/reference snapshot, payment,
+stock movement, audit and outbox bundle. Non-empty supplier reference is unique
+per supplier/business in the serialized command boundary. No supplier credit.
+Each owner-funded expense creates one positive `ownerPayables` entry keyed to the
+expense and owner. No reimbursement endpoint exists in M1; no second expense.
+
+Stock quantity sums integer milliunits (kg permits three decimals; containers and
+services are whole). Movements remain the authority. `stockValuations` is an
+atomic per-location/item quantity/value projection checked against the ledger.
+Receipt value adds exact centavos; a sale consumes a proportion, rounded once to
+centavos; full depletion consumes the remaining value. Average unit cost is a
+display calculation, never a repeatedly rounded product stock value. New receipts
+from zero have ledger cost basis. Legacy stock starts from the preserved M0
+estimated cost; its projection is labeled `legacy_estimate` until exhausted.
+That legacy cost baseline is frozen when editing a tracked catalog item.
+
+Owner manual adjustment requires reason and a cost for positive additions;
+negative adjustments consume proportional inventory value. It creates no money
+movement. No UI/API edits finalized sales/purchases/expenses/stock/payables.
+Cash open→closed and catalog revisions are deliberate audited lifecycle changes.
+
+Still to implement: general money settlements, correction approvals/reversals,
+stock counts and specialist module entities. Types alone do not establish a lifecycle.
 
 ## Module invariants for later milestones
 
 - Rice purchase: sacks × configured kg/sack → kg received. 50 kg at ₱2,300 plus
   50 kg at ₱2,500 = ₱48/kg. Store receipt value and valuation history; the current
-  rounded product cost is only a demo projection, not final multi-device costing.
+  legacy product cost is only a preserved estimate, not multi-device costing.
 - A direct 5 kg weighed sale consumes bulk. A physical pack requires repacking:
   bulk -50 kg ↔ five 10 kg packs. Both quantity and inventory value are conserved.
 - Water customer containers and refill services do not reduce new-container stock.

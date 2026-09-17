@@ -30,7 +30,7 @@ export async function seedDemo(database: BusinessDatabase = db, enabled = demoMo
       { id: demoIds.waterLocation, workspaceId: w, businessId: demoIds.water, name: 'Water store · demo location', active: true },
       { id: demoIds.riceLocation, workspaceId: w, businessId: demoIds.rice, name: 'Rice store · separate demo location', active: true }
     ])
-    await database.members.add({ id: demoIds.actor, workspaceId: w, userId: demoIds.actor, role: 'owner', active: true })
+    await database.members.add({ id: demoIds.actor, workspaceId: w, userId: demoIds.actor, role: 'owner', active: true, displayName: 'Practice owner' })
     await database.locationAccess.bulkAdd([
       { id: fixtureId(20), workspaceId: w, businessId: demoIds.water, locationId: demoIds.waterLocation, memberId: demoIds.actor },
       { id: fixtureId(21), workspaceId: w, businessId: demoIds.rice, locationId: demoIds.riceLocation, memberId: demoIds.actor }
@@ -39,7 +39,10 @@ export async function seedDemo(database: BusinessDatabase = db, enabled = demoMo
       id, workspaceId: w, businessId, name, sku, baseUnit, priceCentavos, estimatedCostCentavos,
       category: baseUnit === 'kg' ? 'Rice' : baseUnit === 'service' ? 'Refill' : 'Container',
       unitLabel: baseUnit === 'service' ? '5-gal refill' : baseUnit,
-      inventoryTracked: baseUnit !== 'service', lowStockThreshold: baseUnit === 'kg' ? 20 : 5, active: true
+      inventoryTracked: baseUnit !== 'service', lowStockThreshold: baseUnit === 'kg' ? 20 : 5, active: true,
+      locationIds: [businessId === demoIds.water ? demoIds.waterLocation : demoIds.riceLocation],
+      domainKind: baseUnit === 'kg' ? 'rice_grain' : baseUnit === 'service' ? 'water_refill' : 'water_container',
+      version: 1, costKnown: true, metadata: {}
     })
     await database.products.bulkAdd([
       product(demoIds.purified, demoIds.water, 'Purified Water Refill', 'W-PUR', 'service', 3000, 900),
